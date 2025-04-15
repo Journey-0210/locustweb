@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>压测平台 - 用户控制台</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* 如果你没有单独的 style.css，这里添加一个简单样式 */
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-container { background: #f9f9f9; padding: 20px; margin: 10px 0; border-radius: 4px; }
+        input { margin: 5px 0; padding: 6px; width: 250px; }
+        button { padding: 6px 12px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<h1>压测平台 - 用户控制台</h1>
+
+<div class="form-container">
+    <h2>提交压测任务</h2>
+    <form id="submitForm">
+        <label>用户ID:</label><br>
+        <input type="text" id="userId" placeholder="请输入用户ID"><br>
+
+        <label>并发数:</label><br>
+        <input type="number" id="numUsers" placeholder="例如: 100"><br>
+
+        <label>Ramp-Up 时间 (秒):</label><br>
+        <input type="number" id="rampUp" placeholder="例如: 10"><br>
+
+        <label>目标网址:</label><br>
+        <input type="text" id="targetUrl" placeholder="http://example.com"><br>
+
+        <label>开始时间:</label><br>
+        <!-- 这里使用 datetime-local 控件，浏览器会显示日期选择器 -->
+        <input type="datetime-local" id="startTime"><br>
+
+        <label>结束时间:</label><br>
+        <input type="datetime-local" id="endTime"><br>
+
+        <button type="button" onclick="submitTask()">提交任务</button>
+    </form>
+</div>
+
+<div class="form-container">
+    <h2>下载测试报告</h2>
+    <label>任务ID:</label><br>
+    <input type="text" id="reportTaskId" placeholder="请输入任务ID"><br>
+    <button onclick="downloadReport('csv')">下载 CSV 报告</button>
+    <button onclick="downloadReport('pdf')">下载 PDF 报告</button>
+</div>
+
+<div class="form-container">
+    <button onclick="logout()">退出登录</button>
+</div>
+
+<script src="js/dashboard.js"></script>
+</body>
+</html>
