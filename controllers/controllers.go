@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	"loadtest_project/models"
+	"loadtest_project/services"
 	"loadtest_project/utils"
 	"log"
 	"net/http"
@@ -14,20 +15,22 @@ import (
 	"time"
 )
 
-// Register 用户注册接口，接收 JSON 格式 { "username": "...", "password": "..." }
+// Register 用户注册接口，角色强制为普通用户
 func Register(c *gin.Context) {
 	var user models.User
 	if err := c.ShouldBindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
+	// 密码加密
 	hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
 		return
 	}
 	user.Password = string(hash)
-	user.Role = "user" // 默认注册为普通用户
+	// 强制角色为 user
+	user.Role = "user"
 	_, err = models.DB.Exec("INSERT INTO users(username, password, role) VALUES(?,?,?)", user.Username, user.Password, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "注册失败"})
@@ -36,7 +39,7 @@ func Register(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "注册成功"})
 }
 
-// Login 用户登录接口，验证后返回 JWT
+// Login 用户登录接口，返回 JWT
 func Login(c *gin.Context) {
 	var req models.User
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -44,8 +47,9 @@ func Login(c *gin.Context) {
 		return
 	}
 	var user models.User
-	err := models.DB.QueryRow("SELECT id, username, password, role FROM users WHERE username = ?", req.Username).
-		Scan(&user.ID, &user.Username, &user.Password, &user.Role)
+	err := models.DB.QueryRow(
+		"SELECT id, username, password, role FROM users WHERE username = ?", req.Username,
+	).Scan(&user.ID, &user.Username, &user.Password, &user.Role)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
 		return
@@ -54,16 +58,51 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "密码错误"})
 		return
 	}
+	// 生成包含角色的 Token
 	token, err := utils.GenerateToken(user.ID, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token生成失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": token})
+	c.JSON(http.StatusOK, gin.H{"token": token, "role": user.Role})
 }
 
-// SubmitLoadTest 用户提交压测任务接口
-// 期望接收 JSON 格式数据，包含：user_id, num_users, ramp_up, target_url, start_time, end_time
+// AdminOnlyMiddleware 验证仅管理员可访问
+func AdminOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tok := c.GetHeader("Authorization")
+		claims, err := utils.ParseToken(tok)
+		if err != nil || claims.Role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// GetPendingTasks 获取所有待审批任务
+func GetPendingTasks(c *gin.Context) {
+	rows, err := models.DB.Query(
+		"SELECT id, user_id, num_users, target_url FROM load_tests WHERE status = 'pending'",
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询待审批任务失败"})
+		return
+	}
+	defer rows.Close()
+	var tasks []models.LoadTest
+	for rows.Next() {
+		var t models.LoadTest
+		if err := rows.Scan(&t.ID, &t.UserID, &t.NumUsers, &t.TargetURL); err != nil {
+			continue
+		}
+		tasks = append(tasks, t)
+	}
+	c.JSON(http.StatusOK, gin.H{"tasks": tasks})
+}
+
+// SubmitRequest 用户提交任务请求体
 type SubmitRequest struct {
 	UserID    int    `json:"user_id"`
 	NumUsers  int    `json:"num_users"`
@@ -73,113 +112,101 @@ type SubmitRequest struct {
 	EndTime   string `json:"end_time"`
 }
 
-// 自定义的 UnmarshalJSON 方法来处理字段类型
+// UnmarshalJSON 自定义解析，确保 user_id 为整数
 func (s *SubmitRequest) UnmarshalJSON(data []byte) error {
 	var raw map[string]interface{}
-
-	// 先将 JSON 数据解析为一个 map 类型
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-
-	// 处理 user_id 字段，确保它是整数类型
-	if userID, ok := raw["user_id"].(string); ok {
-		// 如果是字符串，尝试转换为 int
-		parsedID, err := strconv.Atoi(userID)
+	// 解析 user_id
+	if v, ok := raw["user_id"].(string); ok {
+		id, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("无法将 user_id 转换为整数: %v", err)
 		}
-		s.UserID = parsedID
-	} else if userID, ok := raw["user_id"].(float64); ok {
-		// 如果是数字，直接转换为 int
-		s.UserID = int(userID)
+		s.UserID = id
+	} else if v, ok := raw["user_id"].(float64); ok {
+		s.UserID = int(v)
 	}
-
-	// 继续处理其他字段
-	if numUsers, ok := raw["num_users"].(float64); ok {
-		s.NumUsers = int(numUsers)
+	// 解析其他字段
+	if v, ok := raw["num_users"].(float64); ok {
+		s.NumUsers = int(v)
 	}
-	if rampUp, ok := raw["ramp_up"].(float64); ok {
-		s.RampUp = int(rampUp)
+	if v, ok := raw["ramp_up"].(float64); ok {
+		s.RampUp = int(v)
 	}
-	if targetURL, ok := raw["target_url"].(string); ok {
-		s.TargetURL = targetURL
+	if v, ok := raw["target_url"].(string); ok {
+		s.TargetURL = v
 	}
-	if startTime, ok := raw["start_time"].(string); ok {
-		s.StartTime = startTime
+	if v, ok := raw["start_time"].(string); ok {
+		s.StartTime = v
 	}
-	if endTime, ok := raw["end_time"].(string); ok {
-		s.EndTime = endTime
+	if v, ok := raw["end_time"].(string); ok {
+		s.EndTime = v
 	}
-
 	return nil
 }
 
-// SubmitLoadTest 用户提交压测任务接口
+// SubmitLoadTest 用户提交压测任务
 func SubmitLoadTest(c *gin.Context) {
 	var req SubmitRequest
-	// 绑定 JSON 数据到 SubmitRequest 结构体
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Println("请求数据格式错误:", err) // 打印具体的错误信息
+		log.Println("请求数据格式错误:", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "提交数据格式错误", "detail": err.Error()})
 		return
 	}
-
-	// 解析 start_time 和 end_time
-	const layoutWithoutSeconds = "2006-01-02T15:04"
-	startTime, err := time.Parse(layoutWithoutSeconds, req.StartTime)
+	// 解析时间
+	const layout = "2006-01-02T15:04"
+	st, err := time.Parse(layout, req.StartTime)
 	if err != nil {
-		log.Println("解析 start_time 错误，输入:", req.StartTime, "错误信息:", err.Error())
 		c.JSON(http.StatusBadRequest, gin.H{"error": "start_time 格式错误", "detail": err.Error()})
 		return
 	}
-
-	endTime, err := time.Parse(layoutWithoutSeconds, req.EndTime)
+	et, err := time.Parse(layout, req.EndTime)
 	if err != nil {
-		log.Println("解析 end_time 错误，输入:", req.EndTime, "错误信息:", err.Error())
 		c.JSON(http.StatusBadRequest, gin.H{"error": "end_time 格式错误", "detail": err.Error()})
 		return
 	}
-
-	// 创建任务对象
 	task := models.LoadTest{
 		UserID:    req.UserID,
 		NumUsers:  req.NumUsers,
 		RampUp:    req.RampUp,
 		TargetURL: req.TargetURL,
-		StartTime: startTime,
-		EndTime:   endTime,
+		StartTime: st,
+		EndTime:   et,
 		Status:    "pending",
 	}
-
-	// 保存任务到数据库
 	if err := models.CreateLoadTest(&task); err != nil {
-		log.Println("任务提交失败:", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "任务提交失败", "detail": err.Error()})
 		return
 	}
-
-	// 返回成功响应
 	c.JSON(http.StatusOK, gin.H{"message": "任务提交成功，等待审批"})
 }
 
-// ApproveLoadTest 管理员审批任务接口，参数：通过 PostForm 提交字段 id（任务ID）
+// ApproveLoadTest 管理员审批并启动压测
 func ApproveLoadTest(c *gin.Context) {
+	AdminOnlyMiddleware()(c)
+	if c.IsAborted() {
+		return
+	}
 	idStr := c.PostForm("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务ID"})
 		return
 	}
-	if err := models.UpdateLoadTestStatus(id, "approved"); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "审批失败"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "任务审批成功"})
+	// 更新状态
+	models.DB.Exec("UPDATE load_tests SET status='approved' WHERE id=?", id)
+	// 查询详情
+	var task models.LoadTest
+	models.DB.QueryRow("SELECT id, target_url, num_users FROM load_tests WHERE id=?", id).
+		Scan(&task.ID, &task.TargetURL, &task.NumUsers)
+	// 异步启动压测
+	go services.StartLoadTest(task)
+	c.JSON(http.StatusOK, gin.H{"message": "任务审批通过，压测已启动"})
 }
 
-// SaveTestResult Locust 压测结束后调用此接口上传测试结果，参数以 JSON 格式传入：
-// test_id, tps, avg_response_time, success_count, failure_count
+// SaveTestResult 保存压测结果
 func SaveTestResult(c *gin.Context) {
 	var result models.TestResult
 	if err := c.ShouldBindJSON(&result); err != nil {
@@ -193,8 +220,7 @@ func SaveTestResult(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "测试结果保存成功"})
 }
 
-// DownloadReport 根据请求参数生成报告并返回下载文件
-// URL 参数：test_id 与 format（csv 或 pdf）
+// DownloadReport 下载报告
 func DownloadReport(c *gin.Context) {
 	testIDStr := c.Query("test_id")
 	format := c.Query("format")
@@ -208,10 +234,7 @@ func DownloadReport(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询测试结果失败"})
 		return
 	}
-	// 构造二维字符串数组：第一行为表头，其余行为数据
-	records := [][]string{
-		{"Test ID", "TPS", "Avg Response Time", "Success Count", "Failure Count"},
-	}
+	records := [][]string{{"Test ID", "TPS", "Avg Response Time", "Success Count", "Failure Count"}}
 	for _, res := range results {
 		record := []string{
 			strconv.Itoa(res.TestID),

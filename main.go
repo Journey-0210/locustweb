@@ -2,44 +2,56 @@
 package main
 
 import (
+	"log"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	_ "github.com/go-sql-driver/mysql"
+
 	"loadtest_project/config"
 	"loadtest_project/models"
 	"loadtest_project/routes"
 	"loadtest_project/scheduler"
-	"log"
-
-	"github.com/gin-gonic/gin"
-	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
-	// 连接数据库
+	// 1. 连接数据库
 	config.ConnectDB()
 	models.DB = config.DB
 
-	// 首次运行时创建数据表（根据需要可以注释掉后续重复建表）
+	// 2. 创建表结构（首次运行时开启）
 	if err := models.CreateTables(); err != nil {
 		log.Fatal("建表失败:", err)
 	}
 
-	// 启动任务调度器（自动扫描任务并触发 Locust 压测）
+	// 3. 启动调度器：定时扫描 approved 任务并触发压测
 	go scheduler.StartScheduler()
 
-	// 初始化 Gin 引擎
+	// 4. 初始化 Gin 引擎并启用 CORS
 	r := gin.Default()
+	r.Use(cors.Default())
 
-	// 注册 API 路由
+	// 5. 注册用户及压测相关路由
 	routes.SetupRoutes(r)
 
-	// 提供静态文件服务（确保你的前端代码位于项目根目录下的 frontend 文件夹中）
+	// 6. 注册管理员审批路由
+	routes.SetupAdminRoutes(r)
+
+	// 7. 提供前端静态资源
 	r.Static("/static", "./frontend")
 
-	// 设置默认首页路由，直接返回 index.html
+	// 8. 前端页面路由
 	r.GET("/", func(c *gin.Context) {
 		c.File("./frontend/index.html")
 	})
+	r.GET("/dashboard", func(c *gin.Context) {
+		c.File("./frontend/dashboard.html")
+	})
+	r.GET("/admin", func(c *gin.Context) {
+		c.File("./frontend/admin_dashboard.html")
+	})
 
+	// 9. 启动服务
 	log.Println("服务器启动于 :8080")
-	// 这里 r.Run 必须放在最后，因为它会阻塞后续代码执行
 	r.Run(":8080")
 }

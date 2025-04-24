@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>压测任务审批后台</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+    h2 { color: #333; }
+    table { width: 100%; border-collapse: collapse; background: white; margin-top: 20px; }
+    th, td { padding: 12px; border: 1px solid #ddd; text-align: center; }
+    button { padding: 6px 12px; margin: 0 5px; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+<h2>待审批的压测任务</h2>
+<table id="taskTable">
+  <thead>
+  <tr>
+    <th>ID</th>
+    <th>用户ID</th>
+    <th>并发用户数</th>
+    <th>Ramp Up</th>
+    <th>目标网址</th>
+    <th>开始时间</th>
+    <th>结束时间</th>
+    <th>状态</th>
+    <th>操作</th>
+  </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script>
+  const token = localStorage.getItem("token");  // 假设你登录时已存储 token
+
+  async function loadTasks() {
+    const res = await fetch('/admin/tasks', {
+      headers: { "Authorization": "Bearer " + token }
+    });
+    const tasks = await res.json();
+    const tbody = document.querySelector("#taskTable tbody");
+    tbody.innerHTML = "";
+    tasks.forEach(task => {
+      const row = `
+                <tr>
+                    <td>${task.id}</td>
+                    <td>${task.user_id}</td>
+                    <td>${task.num_users}</td>
+                    <td>${task.ramp_up}</td>
+                    <td>${task.target_url}</td>
+                    <td>${task.start_time}</td>
+                    <td>${task.end_time}</td>
+                    <td>${task.status}</td>
+                    <td>
+                        <button onclick="approveTask(${task.id})">通过</button>
+                        <button onclick="rejectTask(${task.id})">拒绝</button>
+                    </td>
+                </tr>
+            `;
+      tbody.innerHTML += row;
+    });
+  }
+
+  async function approveTask(id) {
+    await fetch(`/admin/approve/${id}`, {
+      method: 'POST',
+      headers: { "Authorization": "Bearer " + token }
+    });
+    alert("已通过任务ID: " + id);
+    loadTasks();
+  }
+
+  async function rejectTask(id) {
+    await fetch(`/admin/reject/${id}`, {
+      method: 'POST',
+      headers: { "Authorization": "Bearer " + token }
+    });
+    alert("已拒绝任务ID: " + id);
+    loadTasks();
+  }
+
+  loadTasks();
+</script>
+
+</body>
+</html>
