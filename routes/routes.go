@@ -11,6 +11,7 @@ func SetupRoutes(r *gin.Engine) {
 	r.POST("/api/login", controllers.Login)
 	// 用户提交任务
 	r.POST("/api/submit", controllers.SubmitLoadTest)
+	r.GET("/api/tasks", controllers.GetUserTasks)
 	// Locust 回调存结果
 	r.POST("/api/upload_result", controllers.SaveTestResult)
 	// 用户下载报告
@@ -22,5 +23,6 @@ func SetupAdminRoutes(r *gin.Engine) {
 	{
 		admin.GET("/tasks", controllers.AdminOnlyMiddleware(), controllers.GetPendingTasks)
 		admin.POST("/approve", controllers.AdminOnlyMiddleware(), controllers.ApproveLoadTest)
+		admin.POST("/reject", controllers.AdminOnlyMiddleware(), controllers.RejectLoadTest)
 	}
 }

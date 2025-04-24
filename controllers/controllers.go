@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -70,8 +71,13 @@ func Login(c *gin.Context) {
 // AdminOnlyMiddleware 验证仅管理员可访问
 func AdminOnlyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tok := c.GetHeader("Authorization")
-		claims, err := utils.ParseToken(tok)
+		authHeader := c.GetHeader("Authorization")
+		// 支持“Bearer <token>”或直接"<token>"
+		token := authHeader
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+		claims, err := utils.ParseToken(token)
 		if err != nil || claims.Role != "admin" {
 			c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
 			c.Abort()
@@ -81,20 +87,40 @@ func AdminOnlyMiddleware() gin.HandlerFunc {
 	}
 }
 
-// GetPendingTasks 获取所有待审批任务
+// GetPendingTasks 获取所有待审批（pending）任务，按开始时间升序
 func GetPendingTasks(c *gin.Context) {
-	rows, err := models.DB.Query(
-		"SELECT id, user_id, num_users, target_url FROM load_tests WHERE status = 'pending'",
-	)
+	// 权限校验
+	authHeader := c.GetHeader("Authorization")
+	tok := authHeader
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		tok = authHeader[7:]
+	}
+	claims, err := utils.ParseToken(tok)
+	if err != nil || claims.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
+		return
+	}
+
+	// 查询数据库，按 start_time 排序
+	rows, err := models.DB.Query(`
+        SELECT id, user_id, num_users, ramp_up, target_url, start_time, end_time, status
+          FROM load_tests
+         WHERE status = 'pending'
+      ORDER BY start_time ASC
+    `)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询待审批任务失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
 	defer rows.Close()
+
 	var tasks []models.LoadTest
 	for rows.Next() {
 		var t models.LoadTest
-		if err := rows.Scan(&t.ID, &t.UserID, &t.NumUsers, &t.TargetURL); err != nil {
+		if err := rows.Scan(
+			&t.ID, &t.UserID, &t.NumUsers, &t.RampUp,
+			&t.TargetURL, &t.StartTime, &t.EndTime, &t.Status,
+		); err != nil {
 			continue
 		}
 		tasks = append(tasks, t)
@@ -204,6 +230,87 @@ func ApproveLoadTest(c *gin.Context) {
 	// 异步启动压测
 	go services.StartLoadTest(task)
 	c.JSON(http.StatusOK, gin.H{"message": "任务审批通过，压测已启动"})
+}
+
+// RejectLoadTest
+func RejectLoadTest(c *gin.Context) {
+	// 服用中间件逻辑，剥离 Bearer 前缀
+	authHeader := c.GetHeader("Authorization")
+	token := authHeader
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	claims, err := utils.ParseToken(token)
+	if err != nil || claims.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
+		c.Abort()
+		return
+	}
+
+	// 解析表单 id
+	idStr := c.PostForm("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务ID"})
+		return
+	}
+	// 更新状态为 rejected
+	if err := models.UpdateLoadTestStatus(id, "rejected"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "拒绝任务失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "任务已拒绝"})
+}
+
+// 获取当前用户所有任务（按 start_time 升序）
+func GetUserTasks(c *gin.Context) {
+	// 从 Header 拿到 token，去掉 Bearer 前缀
+	authHeader := c.GetHeader("Authorization")
+	tok := authHeader
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		tok = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	claims, err := utils.ParseToken(tok)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的Token"})
+		return
+	}
+	userID := claims.UserID
+
+	// 查询该用户的所有任务
+	rows, err := models.DB.Query(`
+        SELECT id, num_users, ramp_up, target_url, start_time, end_time, status
+          FROM load_tests
+         WHERE user_id = ?
+      ORDER BY start_time ASC
+    `, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+	defer rows.Close()
+
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var t models.LoadTest
+		if err := rows.Scan(
+			&t.ID, &t.NumUsers, &t.RampUp,
+			&t.TargetURL, &t.StartTime, &t.EndTime, &t.Status,
+		); err != nil {
+			continue
+		}
+		// 转成 JSON 友好结构
+		tasks = append(tasks, map[string]interface{}{
+			"id":         t.ID,
+			"num_users":  t.NumUsers,
+			"ramp_up":    t.RampUp,
+			"target_url": t.TargetURL,
+			"start_time": t.StartTime,
+			"end_time":   t.EndTime,
+			"status":     t.Status,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"tasks": tasks})
 }
 
 // SaveTestResult 保存压测结果
