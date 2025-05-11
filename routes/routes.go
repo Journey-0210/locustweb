@@ -21,7 +21,7 @@ func SetupRoutes(r *gin.Engine) {
 func SetupAdminRoutes(r *gin.Engine) {
 	admin := r.Group("/admin")
 	{
-		admin.GET("/tasks", controllers.AdminOnlyMiddleware(), controllers.GetPendingTasks)
+		admin.GET("/tasks", controllers.AdminOnlyMiddleware(), controllers.GetTasksByStatus)
 		admin.POST("/approve", controllers.AdminOnlyMiddleware(), controllers.ApproveLoadTest)
 		admin.POST("/reject", controllers.AdminOnlyMiddleware(), controllers.RejectLoadTest)
 	}

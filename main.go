@@ -1,4 +1,3 @@
-// main.go
 package main
 
 import (
@@ -24,23 +23,21 @@ func main() {
 		log.Fatal("建表失败:", err)
 	}
 
-	// 3. 启动调度器：定时扫描 approved 任务并触发压测
+	// 3. 启动调度器
 	go scheduler.StartScheduler()
 
-	// 4. 初始化 Gin 引擎并启用 CORS
+	// 4. 初始化 Gin
 	r := gin.Default()
 	r.Use(cors.Default())
 
-	// 5. 注册用户及压测相关路由
+	// 5. 注册 API 路由
 	routes.SetupRoutes(r)
-
-	// 6. 注册管理员审批路由
 	routes.SetupAdminRoutes(r)
 
-	// 7. 提供前端静态资源
+	// 6. 提供前端静态资源（所有 .html, .js, .css 等）
 	r.Static("/static", "./frontend")
 
-	// 8. 前端页面路由
+	// 7. 页面入口（注意这些 HTML 文件需放在 frontend 根目录下）
 	r.GET("/", func(c *gin.Context) {
 		c.File("./frontend/index.html")
 	})
@@ -48,10 +45,10 @@ func main() {
 		c.File("./frontend/dashboard.html")
 	})
 	r.GET("/admin", func(c *gin.Context) {
-		c.File("./frontend/admin_dashboard.html")
+		c.File("./frontend/admin.html")
 	})
 
-	// 9. 启动服务
+	// 8. 启动服务
 	log.Println("服务器启动于 :8080")
 	r.Run(":8080")
 }

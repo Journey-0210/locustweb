@@ -5,7 +5,6 @@
     <title>压测平台 - 用户控制台</title>
     <link rel="stylesheet" href="css/style.css">
     <style>
-        /* 如果你没有单独的 style.css，这里添加一个简单样式 */
         body { font-family: Arial, sans-serif; margin: 20px; }
         .form-container { background: #f9f9f9; padding: 20px; margin: 10px 0; border-radius: 4px; }
         input { margin: 5px 0; padding: 6px; width: 250px; }
@@ -18,8 +17,9 @@
 <div class="form-container">
     <h2>提交压测任务</h2>
     <form id="submitForm">
-        <label>用户ID:</label><br>
-        <input type="text" id="userId" placeholder="请输入用户ID"><br>
+        <!-- 用户ID 改成从 Token 获取，不让用户手动输入 -->
+        <!-- <label>用户ID:</label><br>
+        <input type="text" id="userId" placeholder="自动获取"><br> -->
 
         <label>并发数:</label><br>
         <input type="number" id="numUsers" placeholder="例如: 100"><br>
@@ -31,13 +31,12 @@
         <input type="text" id="targetUrl" placeholder="http://example.com"><br>
 
         <label>开始时间:</label><br>
-        <!-- 这里使用 datetime-local 控件，浏览器会显示日期选择器 -->
         <input type="datetime-local" id="startTime"><br>
 
         <label>结束时间:</label><br>
         <input type="datetime-local" id="endTime"><br>
 
-        <button type="button" onclick="submitTask()">提交任务</button>
+        <button type="button" id="submitBtn">提交任务</button>
     </form>
 </div>
 
@@ -51,6 +50,7 @@
         <th>目标网址</th>
         <th>开始时间</th>
         <th>结束时间</th>
+        <th>压测时长 (秒)</th>
         <th>状态</th>
         <th>报告</th>
     </tr>
@@ -62,12 +62,12 @@
     <h2>下载测试报告</h2>
     <label>任务ID:</label><br>
     <input type="text" id="reportTaskId" placeholder="请输入任务ID"><br>
-    <button onclick="downloadReport('csv')">下载 CSV 报告</button>
-    <button onclick="downloadReport('pdf')">下载 PDF 报告</button>
+    <button type="button" id="downloadCsvBtn">下载 CSV 报告</button>
+    <button type="button" id="downloadPdfBtn">下载 PDF 报告</button>
 </div>
 
 <div class="form-container">
-    <button onclick="logout()">退出登录</button>
+    <button type="button" id="logoutBtn">退出登录</button>
 </div>
 
 <script src="js/dashboard.js"></script>

@@ -6,10 +6,8 @@ import (
 	"time"
 )
 
-// 全局数据库连接实例
 var DB *sql.DB
 
-// User 用户模型
 type User struct {
 	ID       int
 	Username string
@@ -17,8 +15,6 @@ type User struct {
 	Role     string
 }
 
-// LoadTest 表示一条压测任务记录
-// StartTime 和 EndTime 使用 time.Time 类型，以便于调度器比较
 type LoadTest struct {
 	ID        int       `json:"id"`
 	UserID    int       `json:"user_id"`
@@ -27,20 +23,30 @@ type LoadTest struct {
 	TargetURL string    `json:"target_url"`
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`
-	Status    string    `json:"status"` // 任务状态: pending, approved, running, completed, failed
+	Status    string    `json:"status"`
 }
 
-// TestResult 存储单次压测的结果
 type TestResult struct {
-	ID              int     `json:"id"`
-	TestID          int     `json:"test_id"`
-	TPS             float64 `json:"tps"`
-	AvgResponseTime float64 `json:"avg_response_time"`
-	SuccessCount    int     `json:"success_count"`
-	FailureCount    int     `json:"failure_count"`
+	ID                  int     `json:"id"`
+	TestID              int     `json:"test_id"`
+	TPS                 float64 `json:"tps"`
+	AvgResponseTime     float64 `json:"avg_response_time"`
+	SuccessCount        int     `json:"success_count"`
+	FailureCount        int     `json:"failure_count"`
+	ErrorRate           float64 `json:"error_rate"`
+	MaxResponseTime     float64 `json:"max_response_time"`
+	MinResponseTime     float64 `json:"min_response_time"`
+	RPS                 float64 `json:"rps"`
+	DownloadSpeed       float64 `json:"download_speed"`
+	DownloadSize        float64 `json:"download_size"`
+	DownloadDuration    float64 `json:"download_duration"`
+	DNSTime             float64 `json:"dns_time"`
+	ConnectTime         float64 `json:"connect_time"`
+	TTFB                float64 `json:"ttfb"`
+	ContentDownloadTime float64 `json:"content_download_time"`
+	Availability        float64 `json:"availability"`
 }
 
-// CreateTables 初始化数据库表结构
 func CreateTables() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
@@ -67,6 +73,18 @@ func CreateTables() error {
 			avg_response_time DOUBLE,
 			success_count INT,
 			failure_count INT,
+			error_rate DOUBLE,
+			max_response_time DOUBLE,
+			min_response_time DOUBLE,
+			rps DOUBLE,
+			download_speed DOUBLE,
+			download_size DOUBLE,
+			download_duration DOUBLE,
+			dns_time DOUBLE,
+			connect_time DOUBLE,
+			ttfb DOUBLE,
+			content_download_time DOUBLE,
+			availability DOUBLE,
 			FOREIGN KEY (test_id) REFERENCES load_tests(id)
 		);`,
 	}
@@ -78,7 +96,6 @@ func CreateTables() error {
 	return nil
 }
 
-// CreateLoadTest 插入一条新的压测任务
 func CreateLoadTest(t *LoadTest) error {
 	res, err := DB.Exec(
 		"INSERT INTO load_tests(user_id, num_users, ramp_up, target_url, start_time, end_time, status) VALUES(?,?,?,?,?,?,?)",
@@ -94,13 +111,11 @@ func CreateLoadTest(t *LoadTest) error {
 	return nil
 }
 
-// UpdateLoadTestStatus 更新指定任务的状态
 func UpdateLoadTestStatus(id int, status string) error {
 	_, err := DB.Exec("UPDATE load_tests SET status=? WHERE id=?", status, id)
 	return err
 }
 
-// GetApprovedTasksReadyToRun 查询所有已经审批且到执行时间的任务
 func GetApprovedTasksReadyToRun() ([]LoadTest, error) {
 	now := time.Now()
 	rows, err := DB.Query(
@@ -122,19 +137,29 @@ func GetApprovedTasksReadyToRun() ([]LoadTest, error) {
 	return tasks, nil
 }
 
-// CreateTestResult 保存一次压测结果
 func CreateTestResult(r *TestResult) error {
-	_, err := DB.Exec(
-		"INSERT INTO test_results(test_id, tps, avg_response_time, success_count, failure_count) VALUES(?,?,?,?,?)",
+	_, err := DB.Exec(`
+		INSERT INTO test_results (
+			test_id, tps, avg_response_time, success_count, failure_count,
+			error_rate, max_response_time, min_response_time, rps, download_speed,
+			download_size, download_duration, dns_time, connect_time, ttfb,
+			content_download_time, availability
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.TestID, r.TPS, r.AvgResponseTime, r.SuccessCount, r.FailureCount,
+		r.ErrorRate, r.MaxResponseTime, r.MinResponseTime, r.RPS, r.DownloadSpeed,
+		r.DownloadSize, r.DownloadDuration, r.DNSTime, r.ConnectTime, r.TTFB,
+		r.ContentDownloadTime, r.Availability,
 	)
 	return err
 }
 
-// GetTestResultsByTestID 获取指定任务的所有测试结果
 func GetTestResultsByTestID(testID int) ([]TestResult, error) {
-	rows, err := DB.Query(
-		"SELECT id, test_id, tps, avg_response_time, success_count, failure_count FROM test_results WHERE test_id = ?", testID,
+	rows, err := DB.Query(`
+		SELECT id, test_id, tps, avg_response_time, success_count, failure_count,
+		       error_rate, max_response_time, min_response_time, rps, download_speed,
+		       download_size, download_duration, dns_time, connect_time, ttfb,
+		       content_download_time, availability
+		FROM test_results WHERE test_id = ?`, testID,
 	)
 	if err != nil {
 		return nil, err
@@ -144,7 +169,12 @@ func GetTestResultsByTestID(testID int) ([]TestResult, error) {
 	var results []TestResult
 	for rows.Next() {
 		var r TestResult
-		if err := rows.Scan(&r.ID, &r.TestID, &r.TPS, &r.AvgResponseTime, &r.SuccessCount, &r.FailureCount); err != nil {
+		if err := rows.Scan(
+			&r.ID, &r.TestID, &r.TPS, &r.AvgResponseTime, &r.SuccessCount, &r.FailureCount,
+			&r.ErrorRate, &r.MaxResponseTime, &r.MinResponseTime, &r.RPS, &r.DownloadSpeed,
+			&r.DownloadSize, &r.DownloadDuration, &r.DNSTime, &r.ConnectTime, &r.TTFB,
+			&r.ContentDownloadTime, &r.Availability,
+		); err != nil {
 			continue
 		}
 		results = append(results, r)

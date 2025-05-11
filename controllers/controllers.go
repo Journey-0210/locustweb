@@ -2,6 +2,7 @@
 package controllers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -40,7 +41,7 @@ func Register(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "注册成功"})
 }
 
-// Login 用户登录接口，返回 JWT
+// Login 用户登录接口，返回 JWT 和角色
 func Login(c *gin.Context) {
 	var req models.User
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -65,7 +66,11 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token生成失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": token, "role": user.Role})
+	// 返回 token 和 role
+	c.JSON(http.StatusOK, gin.H{
+		"token": token,
+		"role":  user.Role,
+	})
 }
 
 // AdminOnlyMiddleware 验证仅管理员可访问
@@ -87,38 +92,71 @@ func AdminOnlyMiddleware() gin.HandlerFunc {
 	}
 }
 
-// GetPendingTasks 获取所有待审批（pending）任务，按开始时间升序
-func GetPendingTasks(c *gin.Context) {
-	// 权限校验
+type PendingTaskItem struct {
+	ID        int       `json:"id"`
+	Username  string    `json:"username"` // 新增：用户名字段
+	NumUsers  int       `json:"num_users"`
+	RampUp    int       `json:"ramp_up"`
+	TargetURL string    `json:"target_url"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+	Status    string    `json:"status"`
+}
+
+// GetTasksByStatus 根据 query 参数 ?status=xxx 拉任务
+func GetTasksByStatus(c *gin.Context) {
+	// 1. 校验管理员身份
 	authHeader := c.GetHeader("Authorization")
-	tok := authHeader
-	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		tok = authHeader[7:]
-	}
+	tok := strings.TrimPrefix(authHeader, "Bearer ")
 	claims, err := utils.ParseToken(tok)
 	if err != nil || claims.Role != "admin" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
 		return
 	}
 
-	// 查询数据库，按 start_time 排序
-	rows, err := models.DB.Query(`
-        SELECT id, user_id, num_users, ramp_up, target_url, start_time, end_time, status
-          FROM load_tests
-         WHERE status = 'pending'
-      ORDER BY start_time ASC
-    `)
+	// 2. 读取 status 参数，默认 "pending"
+	status := c.Query("status")
+	if status == "" {
+		status = "pending"
+	}
+	valid := map[string]bool{"pending": true, "approved": true, "rejected": true, "all": true}
+	if !valid[status] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的 status 参数"})
+		return
+	}
+
+	// 3. 构造 SQL
+	var rows *sql.Rows
+	if status == "all" {
+		rows, err = models.DB.Query(`
+            SELECT lt.id, u.username, lt.num_users, lt.ramp_up,
+                   lt.target_url, lt.start_time, lt.end_time, lt.status
+              FROM load_tests lt
+              JOIN users u ON lt.user_id = u.id
+          ORDER BY lt.start_time ASC
+        `)
+	} else {
+		rows, err = models.DB.Query(`
+            SELECT lt.id, u.username, lt.num_users, lt.ramp_up,
+                   lt.target_url, lt.start_time, lt.end_time, lt.status
+              FROM load_tests lt
+              JOIN users u ON lt.user_id = u.id
+             WHERE lt.status = ?
+          ORDER BY lt.start_time ASC
+        `, status)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
 	defer rows.Close()
 
-	var tasks []models.LoadTest
+	// 4. Scan 结果
+	var tasks []PendingTaskItem
 	for rows.Next() {
-		var t models.LoadTest
+		var t PendingTaskItem
 		if err := rows.Scan(
-			&t.ID, &t.UserID, &t.NumUsers, &t.RampUp,
+			&t.ID, &t.Username, &t.NumUsers, &t.RampUp,
 			&t.TargetURL, &t.StartTime, &t.EndTime, &t.Status,
 		); err != nil {
 			continue
@@ -128,84 +166,96 @@ func GetPendingTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"tasks": tasks})
 }
 
-// SubmitRequest 用户提交任务请求体
+// SubmitRequest 接收前端 JSON，自动把 start_time/end_time 解析成 time.Time
 type SubmitRequest struct {
-	UserID    int    `json:"user_id"`
-	NumUsers  int    `json:"num_users"`
-	RampUp    int    `json:"ramp_up"`
-	TargetURL string `json:"target_url"`
-	StartTime string `json:"start_time"`
-	EndTime   string `json:"end_time"`
+	NumUsers  int       `json:"num_users"`
+	RampUp    int       `json:"ramp_up"`
+	TargetURL string    `json:"target_url"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
 }
 
-// UnmarshalJSON 自定义解析，确保 user_id 为整数
+// UnmarshalJSON 自定义反序列化，兼容多种输入格式
 func (s *SubmitRequest) UnmarshalJSON(data []byte) error {
-	var raw map[string]interface{}
+	// 先用一个中间结构拿到 raw 值
+	var raw struct {
+		NumUsers  int         `json:"num_users"`
+		RampUp    int         `json:"ramp_up"`
+		TargetURL string      `json:"target_url"`
+		StartRaw  interface{} `json:"start_time"`
+		EndRaw    interface{} `json:"end_time"`
+	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	// 解析 user_id
-	if v, ok := raw["user_id"].(string); ok {
-		id, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("无法将 user_id 转换为整数: %v", err)
+	s.NumUsers = raw.NumUsers
+	s.RampUp = raw.RampUp
+	s.TargetURL = raw.TargetURL
+
+	// 统一解析函数：尝试多种常见格式
+	parseTime := func(v interface{}) (time.Time, error) {
+		str, ok := v.(string)
+		if !ok {
+			return time.Time{}, fmt.Errorf("时间字段不是字符串: %T", v)
 		}
-		s.UserID = id
-	} else if v, ok := raw["user_id"].(float64); ok {
-		s.UserID = int(v)
+		for _, layout := range []string{
+			time.RFC3339,           // 2006-01-02T15:04:05Z07:00
+			"2006-01-02T15:04:05Z", // 2006-01-02T15:04:05Z
+			"2006-01-02T15:04",     // 2006-01-02T15:04
+		} {
+			if tm, err := time.Parse(layout, str); err == nil {
+				return tm, nil
+			}
+		}
+		return time.Time{}, fmt.Errorf("无法解析时间: %q", str)
 	}
-	// 解析其他字段
-	if v, ok := raw["num_users"].(float64); ok {
-		s.NumUsers = int(v)
+
+	var err error
+	if s.StartTime, err = parseTime(raw.StartRaw); err != nil {
+		return fmt.Errorf("start_time 解析失败: %w", err)
 	}
-	if v, ok := raw["ramp_up"].(float64); ok {
-		s.RampUp = int(v)
-	}
-	if v, ok := raw["target_url"].(string); ok {
-		s.TargetURL = v
-	}
-	if v, ok := raw["start_time"].(string); ok {
-		s.StartTime = v
-	}
-	if v, ok := raw["end_time"].(string); ok {
-		s.EndTime = v
+	if s.EndTime, err = parseTime(raw.EndRaw); err != nil {
+		return fmt.Errorf("end_time 解析失败: %w", err)
 	}
 	return nil
 }
 
 // SubmitLoadTest 用户提交压测任务
 func SubmitLoadTest(c *gin.Context) {
+	// —— 1. 验证 Token，取出用户 ID ——
+	authHeader := c.GetHeader("Authorization")
+	tok := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := utils.ParseToken(tok)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的 Token"})
+		return
+	}
+	userID := claims.UserID
+
+	// —— 2. 直接 Bind 到 SubmitRequest，UnmarshalJSON 会做时间解析 ——
 	var req SubmitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Println("请求数据格式错误:", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "提交数据格式错误", "detail": err.Error()})
 		return
 	}
-	// 解析时间
-	const layout = "2006-01-02T15:04"
-	st, err := time.Parse(layout, req.StartTime)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "start_time 格式错误", "detail": err.Error()})
-		return
-	}
-	et, err := time.Parse(layout, req.EndTime)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "end_time 格式错误", "detail": err.Error()})
-		return
-	}
+
+	// —— 3. 构造 LoadTest 并保存 ——
 	task := models.LoadTest{
-		UserID:    req.UserID,
+		UserID:    userID,
 		NumUsers:  req.NumUsers,
 		RampUp:    req.RampUp,
 		TargetURL: req.TargetURL,
-		StartTime: st,
-		EndTime:   et,
+		StartTime: req.StartTime,
+		EndTime:   req.EndTime,
 		Status:    "pending",
 	}
 	if err := models.CreateLoadTest(&task); err != nil {
+		log.Println("任务提交失败:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "任务提交失败", "detail": err.Error()})
 		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "任务提交成功，等待审批"})
 }
 

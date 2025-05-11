@@ -14,7 +14,6 @@ if (!token) {
  * 如 "2025-04-24T15:30" => "2025-04-24T15:30:00Z"
  */
 function toRFC3339(datetimeLocal) {
-    // 补上秒和 Z 时区后缀
     return datetimeLocal + ":00Z";
 }
 
@@ -46,7 +45,6 @@ async function submitTask() {
     const data = await res.json();
     if (res.ok) {
         alert("任务提交成功，等待审批");
-        // 提交后刷新我的任务列表
         loadMyTasks();
     } else {
         alert("提交失败: " + (data.error || JSON.stringify(data)));
@@ -87,45 +85,40 @@ async function loadMyTasks() {
     tbody.innerHTML = "";
 
     tasks.forEach(t => {
-        // 计算压测时长（秒）
         const duration = Math.floor((new Date(t.end_time) - new Date(t.start_time)) / 1000);
-        // 格式化时间
         const fmtStart = new Date(t.start_time).toLocaleString();
         const fmtEnd   = new Date(t.end_time).toLocaleString();
 
-        // 报告下载链接（仅完成后显示）
         let reportLinks = "";
         if (t.status === "completed") {
             reportLinks = `
-        <a href="${API_BASE}/download_report?test_id=${t.id}&format=csv" target="_blank">CSV</a>
-        <a href="${API_BASE}/download_report?test_id=${t.id}&format=pdf" target="_blank">PDF</a>
-      `;
+                <a href="${API_BASE}/download_report?test_id=${t.id}&format=csv" target="_blank">CSV</a>
+                <a href="${API_BASE}/download_report?test_id=${t.id}&format=pdf" target="_blank">PDF</a>
+            `;
         }
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
-      <td>${t.id}</td>
-      <td>${t.num_users}</td>
-      <td>${t.ramp_up}</td>
-      <td>${t.target_url}</td>
-      <td>${fmtStart}</td>
-      <td>${fmtEnd}</td>
-      <td>${duration}</td>
-      <td>${t.status}</td>
-      <td>${reportLinks}</td>
-    `;
+            <td>${t.id}</td>
+            <td>${t.num_users}</td>
+            <td>${t.ramp_up}</td>
+            <td>${t.target_url}</td>
+            <td>${fmtStart}</td>
+            <td>${fmtEnd}</td>
+            <td>${duration}</td>
+            <td>${t.status}</td>
+            <td>${reportLinks}</td>
+        `;
         tbody.appendChild(tr);
     });
 }
 
-// 页面加载完成后
+// 页面加载完成后绑定事件
 document.addEventListener("DOMContentLoaded", () => {
-    // 绑定按钮事件
     document.getElementById("submitBtn").onclick      = submitTask;
     document.getElementById("downloadCsvBtn").onclick = () => downloadReport("csv");
     document.getElementById("downloadPdfBtn").onclick = () => downloadReport("pdf");
     document.getElementById("logoutBtn").onclick      = logout;
 
-    // 加载任务列表
     loadMyTasks();
 });

@@ -1,0 +1,18 @@
+{
+  "total_requests": 3751,
+  "success_requests": 3751,
+  "failure_requests": 0,
+  "avg_response_time": 771.6119173286496,
+  "max_response_time": 10365.10910000652,
+  "min_response_time": 39.02399999788031,
+  "error_rate": 0.0,
+  "tps": 31.4090248815301,
+  "download_speed": 186695.65419765955,
+  "total_download_size": 22295993,
+  "total_duration": 119.4242742061615,
+  "dns_time": 0,
+  "connect_time": 0,
+  "first_byte_time": 0,
+  "content_time": 0,
+  "availability": 1.0
+}
